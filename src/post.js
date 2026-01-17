@@ -18,9 +18,9 @@ export function ditherToMonochrome(srcRGBA, w, h, levels=2){
   const maxT = 64;
 
   // Terminal tint (phosphor-ish). Adjust these to taste.
-  const TINT_R = 0.18;
+  const TINT_R = 1.00;
   const TINT_G = 1.00;
-  const TINT_B = 0.32;
+  const TINT_B = 0.35;
 
   // Subtle vertical brightness gradient (top a bit dimmer than bottom)
   const GRAD_TOP = 0.90;

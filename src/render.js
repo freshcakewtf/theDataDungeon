@@ -1,6 +1,55 @@
 import { clamp } from './util.js';
 import { TILE } from './dungeon.js';
 
+function portalRGB(x, y, dist, locked) {
+  const t = performance.now() * 0.001;
+
+  // Normalize coords for patterning (tuned for 320x200 internal res)
+  const nx = x * 0.045;
+  const ny = y * 0.07;
+
+  // Swirl + scanline + ring pulse
+  const swirl = Math.sin(nx + t * 3.0 + Math.sin(ny - t * 2.2) * 1.6);
+  const scan = Math.sin(ny * 2.8 + t * 7.0);
+  const ring = Math.sin((nx * nx + ny * ny) * 0.35 - t * 4.0);
+
+  // Door-visibility: stronger when close, slight fog falloff
+  const fade = 1.0 / (1.0 + dist * 0.22);
+  // Stronger / faster pulse, plus a subtle strobe for "flash" moments
+  const pulse = 0.55 + 0.45 * Math.sin(t * 3.8 - dist * 0.55);
+  const strobe = 0.65 + 0.35 * Math.sin(t * 12.0 + nx * 2.0 - ny * 1.5);
+
+  // Base palette
+  // Locked: magenta/purple; Open: cyan/green
+  let r, g, b;
+  if (locked) {
+    r = 130 + 95 * (0.5 + 0.5 * swirl);
+    g = 25 + 70 * (0.5 + 0.5 * scan);
+    b = 150 + 85 * (0.5 + 0.5 * ring);
+  } else {
+    r = 60 + 70 * (0.5 + 0.5 * ring);
+    g = 120 + 95 * (0.5 + 0.5 * swirl);
+    b = 140 + 95 * (0.5 + 0.5 * scan);
+  }
+
+  // Add a subtle "stairs" diagonal highlight so it's readable even if animation is subtle
+  const stairs = (((x >> 2) + (y >> 2)) & 7) === 0 ? 1.45 : 1.0;
+
+  const mul = pulse * strobe * (0.60 + 1.10 * fade) * stairs;
+  // Micro-pop: nonlinear boost so bright parts get brighter
+  const pop = 1.0 + 0.35 * (0.5 + 0.5 * swirl);
+  r = r * mul * pop;
+  g = g * mul * pop;
+  b = b * mul * pop;
+
+  // Clamp
+  r = r < 0 ? 0 : r > 255 ? 255 : r;
+  g = g < 0 ? 0 : g > 255 ? 255 : g;
+  b = b < 0 ? 0 : b > 255 ? 255 : b;
+
+  return [r | 0, g | 0, b | 0];
+}
+
 export function renderScene(state, cfg, img) {
   const { w, h, data } = img;
   const z = state.zbuf;
@@ -29,21 +78,40 @@ export function renderScene(state, cfg, img) {
     const drawEnd = Math.min(H - 1, (H >> 1) + (lineH >> 1));
     const shadeBase = 1 - clamp(dist * cfg.FOG, 0, 0.88);
 
-    // different tile types
-    let base = 110;
-    if (hit.tile === TILE.DOOR_LOCKED) base = 140;
-    if (hit.tile === TILE.DOOR_OPEN) base = 90;
+    const isLockedDoor = hit.tile === TILE.DOOR_LOCKED;
+    const isOpenDoor = hit.tile === TILE.DOOR_OPEN;
+    const isDoor = isLockedDoor || isOpenDoor;
 
     // side darkening
     const sideMul = hit.side ? 0.82 : 1.0;
-    const v = clamp(Math.floor(base * shadeBase * sideMul), 0, 255);
 
-    for (let y = drawStart; y <= drawEnd; y++) {
-      const i = (y * W + x) * 4;
-      data[i] = v;
-      data[i + 1] = v;
-      data[i + 2] = v;
-      data[i + 3] = 255;
+    if (isDoor) {
+      // Animated portal door: very visible vs walls
+      for (let y = drawStart; y <= drawEnd; y++) {
+        const i = (y * W + x) * 4;
+        let [r, g, b] = portalRGB(x, y, dist, isLockedDoor);
+
+        // Apply fog + side darkening
+        r = clamp(Math.floor(r * shadeBase * sideMul), 0, 255);
+        g = clamp(Math.floor(g * shadeBase * sideMul), 0, 255);
+        b = clamp(Math.floor(b * shadeBase * sideMul), 0, 255);
+
+        data[i] = r;
+        data[i + 1] = g;
+        data[i + 2] = b;
+        data[i + 3] = 255;
+      }
+    } else {
+      // Regular walls (flat grayscale)
+      const base = 110;
+      const v = clamp(Math.floor(base * shadeBase * sideMul), 0, 255);
+      for (let y = drawStart; y <= drawEnd; y++) {
+        const i = (y * W + x) * 4;
+        data[i] = v;
+        data[i + 1] = v;
+        data[i + 2] = v;
+        data[i + 3] = 255;
+      }
     }
   }
 }

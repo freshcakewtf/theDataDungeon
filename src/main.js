@@ -5,6 +5,57 @@ import { renderScene, renderSprites, renderWeapon } from './render.js';
 import { ditherToMonochrome } from './post.js';
 import { dist, angleDiff, wrapAngle } from './util.js';
 
+// --- Music ---
+// NOTE: In normal browser builds, use the relative path in /lib.
+// The absolute /Volumes path is kept as an optional first attempt for local desktop shells.
+const MUSIC_SRC = '/Volumes/DevBox/Games/theDataDungeon/lib/ES_Tiger Tracks - Lexica.mp3';
+const MUSIC_FALLBACK_SRC = 'lib/ES_Tiger Tracks - Lexica.mp3';
+let musicAudio = null;
+let musicStarted = false;
+let musicMuted = false;
+
+function initMusic() {
+  if (musicAudio) return;
+
+  musicAudio = new Audio();
+  musicAudio.src = MUSIC_SRC;
+  musicAudio.preload = 'auto';
+  musicAudio.loop = true;
+  musicAudio.volume = 0.6;
+  musicAudio.muted = musicMuted;
+
+  // If the absolute path fails, switch to a relative URL.
+  musicAudio.addEventListener(
+    'error',
+    () => {
+      if (musicAudio && musicAudio.src && !musicAudio.src.endsWith(MUSIC_FALLBACK_SRC)) {
+        musicAudio.src = MUSIC_FALLBACK_SRC;
+        musicAudio.load();
+      }
+    },
+    { once: true }
+  );
+}
+
+async function startMusicIfNeeded() {
+  initMusic();
+  if (musicStarted || !musicAudio) return;
+  try {
+    await musicAudio.play();
+    musicStarted = true;
+  } catch {
+    // Autoplay blocked; try again on the next user gesture.
+  }
+}
+
+function toggleMusicMute() {
+  musicMuted = !musicMuted;
+  initMusic();
+  if (musicAudio) musicAudio.muted = musicMuted;
+  if (!musicMuted) startMusicIfNeeded();
+  updateHUD();
+}
+
 const canvas = document.getElementById('game');
 const hud = document.getElementById('hud');
 const centerMsg = document.getElementById('centerMsg');
@@ -14,8 +65,7 @@ const INTERNAL_W = 320;
 const INTERNAL_H = 200;
 
 // ✅ Dither strength control:
-// Lower = more crunchy/visible dither. Try 2 or 3 for strong bitmap feel.
-const DITHER_LEVELS = 4;
+const DITHER_LEVELS = 3;
 
 let cfg = { ...CONFIG, INTERNAL_W, INTERNAL_H, DITHER_LEVELS };
 
@@ -31,27 +81,29 @@ offCtx.imageSmoothingEnabled = false;
 
 let imgData = offCtx.createImageData(cfg.INTERNAL_W, cfg.INTERNAL_H);
 
-// --- sprite loader (loads PNG -> ImageData for software sprite draw) ---
+// --- robust sprite loader (verifies URL with fetch, avoids silent failures) ---
 async function loadBitmapSprite(url, w, h) {
+  // 1) Verify it exists (gives clear 200/404)
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    console.log('✅ fetch ok:', url, res.status);
+  } catch (e) {
+    console.error('❌ fetch failed:', url, e);
+    throw e;
+  }
+
+  // 2) Load image
   const img = new Image();
+  img.crossOrigin = 'anonymous';
 
-  // Helpful debug output if the path is wrong / file not served
-  img.onload = () => console.log('✅ sprite loaded:', url);
-  img.onerror = (e) => console.error('❌ sprite failed to load:', url, e);
-
-  // Wait for a real load event (more reliable than decode() for debugging)
   await new Promise((resolve, reject) => {
-    img.onload = () => {
-      console.log('✅ sprite loaded:', url);
-      resolve();
-    };
-    img.onerror = (e) => {
-      console.error('❌ sprite failed to load:', url, e);
-      reject(new Error(`Failed to load sprite: ${url}`));
-    };
+    img.onload = resolve;
+    img.onerror = () => reject(new Error(`Image load error for ${url}`));
     img.src = url;
   });
 
+  // 3) Draw to temp canvas and extract pixels
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;
@@ -60,21 +112,42 @@ async function loadBitmapSprite(url, w, h) {
   ctx.imageSmoothingEnabled = false;
   ctx.clearRect(0, 0, w, h);
 
-  // force resize to a small bitmap sprite size
   ctx.drawImage(img, 0, 0, w, h);
 
-  const id = ctx.getImageData(0, 0, w, h);
+  let id;
+  try {
+    id = ctx.getImageData(0, 0, w, h);
+  } catch (e) {
+    console.error('❌ getImageData failed (tainted canvas?) for:', url, e);
+    throw e;
+  }
+
+  console.log('✅ sprite ImageData ready:', url, w, h);
   return { w, h, data: id.data };
+}
+
+async function loadFirstWorking(candidates, w, h, label) {
+  for (const url of candidates) {
+    try {
+      console.log(`🔎 trying ${label}:`, url);
+      const tex = await loadBitmapSprite(url, w, h);
+      console.log(`✅ ${label} loaded from`, url, `(${tex.w}x${tex.h})`);
+      return tex;
+    } catch (e) {
+      console.warn(`❌ ${label} failed from`, url, e);
+    }
+  }
+  return null;
 }
 
 const keys = new Set();
 let mouseDX = 0;
 let pointerLocked = false;
 
-// ---- HUD layout helpers (title/controls above, stats below) ----
-const HUD_TOP_OFFSET = 64; // bigger = more space between HUD block and game canvas
-const CONTROLS_MARGIN_TOP = 14; // margin between title and controls (positive = more space)
-const STATS_MARGIN_TOP = 10; // space under canvas for stats
+// ---- HUD layout helpers ----
+const HUD_TOP_OFFSET = 64;
+const CONTROLS_MARGIN_TOP = 14;
+const STATS_MARGIN_TOP = 10;
 
 function layoutHUD() {
   const r = canvas.getBoundingClientRect();
@@ -86,8 +159,6 @@ function layoutHUD() {
   hud.style.textShadow = '0 1px 0 #000';
   hud.style.userSelect = 'none';
   hud.style.pointerEvents = 'none';
-
-  // push HUD above the canvas (for title + stats)
   hud.style.top = `${Math.round(r.top) - HUD_TOP_OFFSET}px`;
 }
 
@@ -117,8 +188,13 @@ const state = {
 
   dead: false,
 
-  // ✅ will be set on boot
+  // textures
   enemyTex: null,
+  playerWalkTex: null,
+  playerPunchTex: null,
+  weaponTex: null,
+
+  playerIsMoving: false,
 };
 
 function startRun() {
@@ -141,7 +217,6 @@ function nextFloor(resetHp = false) {
 
   state.doorUnlocked = false;
 
-  // spawn enemies
   const count = cfg.BASE_ENEMIES + (state.floor - 1) * cfg.ENEMY_GROWTH;
   state.sprites = [];
   spawnEnemies(count);
@@ -158,7 +233,6 @@ function nextFloor(resetHp = false) {
 }
 
 function spawnEnemies(n) {
-  // choose random floor tiles in rooms excluding player's start room area
   const grid = state.grid;
   const W = grid[0].length,
     H = grid.length;
@@ -177,8 +251,7 @@ function spawnEnemies(n) {
       hp: cfg.ENEMY_HP + Math.floor((state.floor - 1) / 4),
       alive: true,
       hitFlash: 0,
-      // Provide per-sprite texture in case the renderer expects it
-      tex: state.enemyTex,
+      tex: state.enemyTex, // renderer must use this
     });
     n--;
   }
@@ -214,7 +287,8 @@ function movePlayer(dt) {
   if (keys.has('KeyD')) strafe += 1;
   if (keys.has('KeyA')) strafe -= 1;
 
-  // rotation
+  state.playerIsMoving = forward !== 0 || strafe !== 0;
+
   let turn = 0;
   if (keys.has('ArrowLeft')) turn -= 1;
   if (keys.has('ArrowRight')) turn += 1;
@@ -225,7 +299,6 @@ function movePlayer(dt) {
   const vx = (Math.cos(p.a) * forward + Math.cos(p.a + Math.PI / 2) * strafe) * speed;
   const vy = (Math.sin(p.a) * forward + Math.sin(p.a + Math.PI / 2) * strafe) * speed;
 
-  // collision (separate axis)
   const r = 0.22;
   const nx = p.x + vx * dt;
   const ny = p.y + vy * dt;
@@ -233,7 +306,6 @@ function movePlayer(dt) {
   if (isWalkable(nx + r, p.y) && isWalkable(nx - r, p.y)) p.x = nx;
   if (isWalkable(p.x, ny + r) && isWalkable(p.x, ny - r)) p.y = ny;
 
-  // door interaction: if unlocked and near door, go next
   if (state.doorUnlocked) {
     const dd = dist(p.x, p.y, state.door.x, state.door.y);
     if (dd < 0.7) {
@@ -254,7 +326,6 @@ function updateEnemies(dt) {
     aliveCount++;
     e.hitFlash = Math.max(0, e.hitFlash - dt * 6);
 
-    // simple chase with LOS gating so they don't "know" through walls
     const canSee = raycastLOS(state, e.x, e.y, p.x, p.y, 10);
     if (!canSee) continue;
 
@@ -263,7 +334,6 @@ function updateEnemies(dt) {
     const d = Math.hypot(dx, dy);
 
     if (d < 0.35) {
-      // damage player on contact (cooldown-ish)
       if (!e._atk) e._atk = 0;
       e._atk -= dt;
       if (e._atk <= 0) {
@@ -278,7 +348,6 @@ function updateEnemies(dt) {
     const ex = e.x + (dx / d) * speed * dt;
     const ey = e.y + (dy / d) * speed * dt;
 
-    // enemy collision with walls
     const r = 0.22;
     const okX = isWalkable(ex + r, e.y) && isWalkable(ex - r, e.y);
     const okY = isWalkable(e.x, ey + r) && isWalkable(e.x, ey - r);
@@ -304,7 +373,6 @@ function swing() {
   state.swingTimer = cfg.SWING_ACTIVE;
   state.swingT = 1;
 
-  // hit test enemies in a cone
   const p = state.player;
 
   for (const e of state.sprites) {
@@ -316,13 +384,11 @@ function swing() {
     const da = Math.abs(angleDiff(angTo, p.a));
     if (da > cfg.SWING_ARC / 2) continue;
 
-    // line of sight for fairness (no wall hits)
     if (!raycastLOS(state, p.x, p.y, e.x, e.y, cfg.SWORD_RANGE + 0.2)) continue;
 
     e.hp -= cfg.DAMAGE;
     e.hitFlash = 1.0;
 
-    // knockback
     e.x += Math.cos(angTo) * 0.16;
     e.y += Math.sin(angTo) * 0.16;
 
@@ -363,14 +429,12 @@ function drawMinimap() {
     }
   }
 
-  // enemies
   display.fillStyle = 'rgb(200,200,200)';
   for (const e of state.sprites) {
     if (!e.alive) continue;
     display.fillRect(ox + e.x * scale - 1, oy + e.y * scale - 1, 2, 2);
   }
 
-  // player
   display.fillStyle = 'rgb(255,255,255)';
   display.fillRect(ox + state.player.x * scale - 1, oy + state.player.y * scale - 1, 2, 2);
 
@@ -378,12 +442,10 @@ function drawMinimap() {
 }
 
 function resize() {
-  // choose integer scale to fit while preserving 320x200 aspect
   const maxW = window.innerWidth;
   const maxH = window.innerHeight;
 
-  // reserve space for title/stats above and controls below
-  const verticalReserve = 140; // adjust if you add more UI
+  const verticalReserve = 140;
   const usableH = Math.max(1, maxH - verticalReserve);
 
   const s = Math.max(1, Math.floor(Math.min(maxW / cfg.INTERNAL_W, usableH / cfg.INTERNAL_H)));
@@ -394,26 +456,31 @@ function resize() {
   canvas.style.height = `${canvas.height}px`;
 
   display.imageSmoothingEnabled = false;
-
-  // update HUD position after layout
   requestAnimationFrame(layoutHUD);
 }
 window.addEventListener('resize', resize);
 
 document.addEventListener('keydown', (e) => {
+  startMusicIfNeeded();
   keys.add(e.code);
+
   if (e.code === 'KeyR') startRun();
   if (e.code === 'KeyT') state.enableDither = !state.enableDither;
-  if (e.code === 'KeyM') state.showMap = !state.showMap;
+
+  // Map toggle moved off M so M can be used for mute.
+  if (e.code === 'KeyN') state.showMap = !state.showMap;
+
+  // Music mute/unmute
+  if (e.code === 'KeyM') toggleMusicMute();
+
   if (e.code === 'Space') swing();
 });
 
 document.addEventListener('keyup', (e) => keys.delete(e.code));
 
 canvas.addEventListener('click', async () => {
-  if (!pointerLocked) {
-    await canvas.requestPointerLock();
-  }
+  startMusicIfNeeded();
+  if (!pointerLocked) await canvas.requestPointerLock();
   swing();
 });
 
@@ -429,20 +496,11 @@ function updateHUD() {
   const statsTop = statsYBelowCanvas();
 
   hud.innerHTML = `
-    <div style="
-      text-align:center;
-      font-size:34px;
-      letter-spacing:0.02em;
-      margin-bottom:-6px;
-    ">
+    <div style="text-align:center;font-size:34px;letter-spacing:0.02em;margin-bottom:-6px;">
       <b>The Data Dungeon</b>
     </div>
 
-    <div style="
-      text-align:center;
-      font-size:20px;
-      margin-bottom:${CONTROLS_MARGIN_TOP}px;
-    ">
+    <div style="text-align:center;font-size:20px;margin-bottom:${CONTROLS_MARGIN_TOP}px;">
       Floor: <b>${state.floor}</b>
       &nbsp;•&nbsp;
       Health: <b>${state.player.hp}</b>
@@ -450,7 +508,8 @@ function updateHUD() {
       Enemies Left: <b>${state.enemiesRemaining}</b>
     </div>
 
-    <div class="dim" style="
+    <!-- Clickable HUD controls (only this wrapper allows pointer events) -->
+    <div style="
       position:fixed;
       left:${hud.style.left};
       top:${statsTop}px;
@@ -458,11 +517,35 @@ function updateHUD() {
       text-align:center;
       font-size:14px;
       line-height:1.2;
-      opacity:.8;
-    ">
-      Controls.exe: W A S D • Mouse / ← → • Click / Space • M map • R reboot • T dither
+      opacity:.9;
+      pointer-events:auto;">
+
+      <div class="dim" style="margin-bottom:6px;opacity:.8;">
+        Controls.exe: W A S D • Mouse / ← → • Click / Space • N nav • M mute • R reboot • T dither
+      </div>
+
+      <div style="display:inline-flex;gap:10px;align-items:center;justify-content:center;">
+        <button id="hudMapToggle" type="button" style="pointer-events:auto;">${state.showMap ? 'Hide' : 'Show'} Map</button>
+        <button id="hudMusicToggle" type="button" style="pointer-events:auto;">${musicMuted ? 'Unmute' : 'Mute'} Music</button>
+        <span class="dim" style="opacity:.75;">
+          Music: <b>${musicMuted ? 'Muted' : (musicStarted ? 'On' : 'Ready')}</b>
+        </span>
+      </div>
     </div>
   `;
+
+  const mapBtn = document.getElementById('hudMapToggle');
+  if (mapBtn) {
+    mapBtn.onclick = () => {
+      state.showMap = !state.showMap;
+      updateHUD();
+    };
+  }
+
+  const musicBtn = document.getElementById('hudMusicToggle');
+  if (musicBtn) {
+    musicBtn.onclick = () => toggleMusicMute();
+  }
 }
 
 let last = performance.now();
@@ -471,26 +554,30 @@ function frame(now) {
   last = now;
 
   if (!state.dead) {
-    // cooldowns
     state.swingCooldown = Math.max(0, state.swingCooldown - dt);
     state.swingTimer = Math.max(0, state.swingTimer - dt);
-    // swing animation param
     state.swingT = state.swingTimer > 0 ? state.swingTimer / cfg.SWING_ACTIVE : 0;
 
     movePlayer(dt);
     updateEnemies(dt);
   }
 
-  // cast & render
+  // Select player overlay sprite (renderWeapon must use state.weaponTex)
+  if (state.swingTimer > 0 && state.playerPunchTex) {
+    state.weaponTex = state.playerPunchTex;
+  } else if (state.playerIsMoving && state.playerWalkTex) {
+    state.weaponTex = state.playerWalkTex;
+  } else {
+    state.weaponTex = state.playerWalkTex || null;
+  }
+
   castRays(state, cfg);
 
-  // render into ImageData
   const img = { ctx2: offCtx, w: cfg.INTERNAL_W, h: cfg.INTERNAL_H, data: imgData.data };
   renderScene(state, cfg, img);
   renderSprites(state, cfg, img);
   renderWeapon(state, cfg, img);
 
-  // post-process dither
   if (state.enableDither) {
     const d = ditherToMonochrome(imgData.data, cfg.INTERNAL_W, cfg.INTERNAL_H, cfg.DITHER_LEVELS);
     imgData.data.set(d);
@@ -498,7 +585,6 @@ function frame(now) {
 
   offCtx.putImageData(imgData, 0, 0);
 
-  // scale to display
   display.imageSmoothingEnabled = false;
   display.clearRect(0, 0, canvas.width, canvas.height);
   display.drawImage(off, 0, 0, canvas.width, canvas.height);
@@ -510,30 +596,39 @@ function frame(now) {
 }
 
 resize();
+initMusic();
 
-// ✅ Load enemy texture once, then start
+// ✅ Load textures once, then start
 (async () => {
-  const enemySpriteCandidates = [
-    '/lib/DataDungeon_enemy.png',      // most common: served from public root
-    '../lib/DataDungeon_enemy.png',    // if main.js is served from /src/
-    './lib/DataDungeon_enemy.png',     // original attempt
+  const enemyCandidates = [
+    '/lib/DataDungeon_enemy.png',
+    'lib/DataDungeon_enemy.png',
+    new URL('../lib/DataDungeon_enemy.png', import.meta.url).href,
+    new URL('./lib/DataDungeon_enemy.png', import.meta.url).href,
   ];
 
-  state.enemyTex = null;
+  const walkCandidates = [
+    '/lib/PlayerWalk.png',
+    'lib/PlayerWalk.png',
+    new URL('../lib/PlayerWalk.png', import.meta.url).href,
+    new URL('./lib/PlayerWalk.png', import.meta.url).href,
+  ];
 
-  for (const url of enemySpriteCandidates) {
-    try {
-      state.enemyTex = await loadBitmapSprite(url, 48, 48);
-      console.log('enemyTex loaded:', state.enemyTex.w, state.enemyTex.h, 'from', url);
-      break;
-    } catch (err) {
-      console.warn('Enemy sprite load failed for:', url, err);
-    }
-  }
+  const punchCandidates = [
+    '/lib/PlayerPunch.png',
+    'lib/PlayerPunch.png',
+    new URL('../lib/PlayerPunch.png', import.meta.url).href,
+    new URL('./lib/PlayerPunch.png', import.meta.url).href,
+  ];
 
-  if (!state.enemyTex) {
-    console.warn('Failed to load enemy sprite from all candidates. Falling back to blob enemy.');
-  }
+  // Your declared image sizes
+  state.enemyTex = await loadFirstWorking(enemyCandidates, 1024, 1024, 'enemyTex');
+  state.playerWalkTex = await loadFirstWorking(walkCandidates, 1376, 768, 'playerWalkTex');
+  state.playerPunchTex = await loadFirstWorking(punchCandidates, 1376, 768, 'playerPunchTex');
+
+  if (!state.enemyTex) console.error('🚫 Enemy sprite not found at any candidate path.');
+  if (!state.playerWalkTex) console.error('🚫 PlayerWalk sprite not found at any candidate path.');
+  if (!state.playerPunchTex) console.error('🚫 PlayerPunch sprite not found at any candidate path.');
 
   startRun();
   requestAnimationFrame(frame);
