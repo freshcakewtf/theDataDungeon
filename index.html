@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>The Data Dungeon</title>
+  <!-- Social / Share Metadata -->
+  <meta name="description" content="A retro bitmap dungeon crawler set inside a corrupted computer system." />
+
+  <!-- Open Graph (Discord, Facebook, Slack, etc.) -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="The Data Dungeon" />
+  <meta property="og:description" content="A retro bitmap inspired dungeon crawler set inside a corrupted computer system." />
+  <meta property="og:image" content="./lib/DataDungeon_cover.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <!-- Twitter / X -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="The Data Dungeon" />
+  <meta name="twitter:description" content="A retro bitmap dungeon crawler set inside a corrupted computer system." />
+  <meta name="twitter:image" content="./lib/DataDungeon_cover.png" />
+  <style>
+    @font-face {
+      font-family: "Jacquard12";
+      src: url("./lib/Jacquard12-Regular.ttf") format("truetype");
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: "Jacquard12", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+
+      /* Background image */
+      background-image: url("./lib/DataDungeonBKG.png");
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+    }
+
+    #wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Floating game container */
+    #gameFrame {
+      position: relative;
+      padding: 36px 36px 28px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.78);
+      box-shadow: 0 18px 55px rgba(0,0,0,0.6);
+    }
+
+    #gameFrame::before {
+      content: "";
+      position: absolute;
+      inset: 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      pointer-events: none;
+    }
+
+    #gameFrame canvas {
+      display: block;
+      margin: 0 auto;
+    }
+    *, *::before, *::after { font-family: inherit; }
+    canvas { image-rendering: pixelated; image-rendering: crisp-edges; border:1px solid #222; background:#000; }
+    #hud {
+      position: fixed; left: 12px; top: 12px;
+      font-size: 14px; line-height: 1.25;
+      color: #e6e6e6; text-shadow: 0 1px 0 #000;
+      user-select:none;
+    }
+    #hud .dim { opacity: .75; }
+    #hud kbd { font-family: inherit;
+      border:1px solid #444; border-bottom-width:2px; padding:1px 6px; border-radius:6px; background:#111; }
+    #centerMsg {
+      position: fixed; inset: 0; display:flex; align-items:center; justify-content:center;
+      pointer-events:none; text-align:center; padding: 24px;
+      color:#eaeaea; text-shadow: 0 2px 0 #000;
+      font-size: 18px; line-height: 1.35;
+    }
+  /* Lore button */
+  #loreBtn {
+    position: fixed;
+    top: 14px;
+    right: 16px;
+    padding: 6px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #eaeaea;
+    background: rgba(0,0,0,0.75);
+    border: 1px solid #444;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+
+  #loreBtn:hover { background: rgba(20,20,20,0.85); }
+
+  /* Lore overlay */
+  #loreOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  #lorePanel {
+    max-width: 760px;
+    max-height: 80vh;
+    overflow-y: auto;
+    background: #0b0b0b;
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 24px 28px 32px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+  }
+
+  #lorePanel h1, #lorePanel h2, #lorePanel h3 {
+    margin-top: 1.2em;
+  }
+
+  #lorePanel pre {
+    white-space: pre-wrap;
+    margin: 0;
+    line-height: 1.35;
+  }
+
+  #loreClose {
+    position: sticky;
+    top: 0;
+    float: right;
+    margin-left: 16px;
+    font-size: 14px;
+    padding: 4px 10px;
+    cursor: pointer;
+    background: #111;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e6e6e6;
+  }
+  </style>
+</head>
+<body>
+  <button id="loreBtn">Lore</button>
+
+  <div id="wrap">
+    <div id="gameFrame">
+      <canvas id="game"></canvas>
+      <div id="hud"></div>
+    </div>
+  </div>
+
+  <div id="centerMsg"></div>
+
+  <div id="loreOverlay">
+    <div id="lorePanel">
+      <button id="loreClose">Close</button>
+      <pre id="loreContent">Loading lore...</pre>
+    </div>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+
+  <script>
+    const loreBtn = document.getElementById('loreBtn');
+    const loreOverlay = document.getElementById('loreOverlay');
+    const loreClose = document.getElementById('loreClose');
+    const loreContent = document.getElementById('loreContent');
+
+    async function loadLore() {
+      try {
+        const res = await fetch('./README.md', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        loreContent.textContent = text;
+      } catch (e) {
+        loreContent.textContent = 'Failed to load README.md lore.\\n\\nMake sure you are running the game from a local web server (not file://).\\nExample: python3 -m http.server';
+      }
+    }
+
+    loreBtn.onclick = async () => {
+      loreOverlay.style.display = 'flex';
+      if (!loreContent.dataset.loaded) {
+        await loadLore();
+        loreContent.dataset.loaded = 'true';
+      }
+    };
+
+    loreClose.onclick = () => {
+      loreOverlay.style.display = 'none';
+    };
+
+    loreOverlay.onclick = (e) => {
+      if (e.target === loreOverlay) loreOverlay.style.display = 'none';
+    };
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && loreOverlay.style.display === 'flex') {
+        loreOverlay.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+<!-- Removed duplicate loreOverlay -->
+</html>
